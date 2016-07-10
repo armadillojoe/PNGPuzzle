@@ -10,19 +10,31 @@ use std::io::SeekFrom;
 use std::fs::File;
 use std::path::Path;
 use std::str;
-use std::mem::transmute;
+use std::env;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use crc::{crc32, Hasher32};
+use crc::crc32;
 
 #[allow(unused_mut)]
 fn main() {
-	let path = Path::new("out.png");
-	let mut file = File::open(&path).unwrap();
-	let src_path = Path::new("frog.jpg");
-	let mut src_file = File::open(&src_path).unwrap();
-	//inject_payload(&file, &src_file);
-	read_header(&file);
-	read_chunk(&file, true);
+	let args: Vec<_> = env::args().collect();
+	if args.len() < 3 {
+		println!("Usage {} <mode> <args>", args[0]);
+	} else {
+		let path = Path::new(&args[2]);
+		let mut dest_file = File::open(&path).unwrap();
+		if args[1] == "encode" {
+			if args.len() < 4 {
+				println!("Usage {} encode <src> <dest>", args[0]);
+			} else {
+				let src_path = Path::new(&args[3]);
+				let mut src_file = File::open(&src_path).unwrap();
+				inject_payload(&dest_file, &src_file);
+			}
+		} else if args[1] == "view" {
+			read_header(&dest_file);
+			read_chunk(&dest_file, true);
+		}
+	}
 }
 
 fn read_header(mut file: &File) {
@@ -86,11 +98,7 @@ fn inject_payload(mut dest: &File, mut src: &File) {
 	for i in 0..temp.len() {
 		payload.push(temp[i]);
 	}
-	/*for i in 0..16 {
-		print!("{:02x} ", payload[i]);
-	}*/
 	let checksum = crc32::checksum_ieee(payload.as_slice());
-	//println!("{:x}", checksum);
 	out_file.write_all(&mut dest_buf).unwrap();
 	out_file.write_u32::<BigEndian>(src_size as u32).unwrap();
 	out_file.write_all(&mut payload).unwrap();
