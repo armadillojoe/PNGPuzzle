@@ -1,7 +1,7 @@
 [package]
 name = "pngpuzzle"
 version = "0.1.0"
-authors = ["Joe Joe <armadillojoe1@gmail.com>"]
+authors = ["Joseph Jimenez <armadillojoe1@gmail.com>"]
 
 [dependencies]
 byteorder = "0.5.3"

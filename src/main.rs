@@ -37,6 +37,7 @@ fn main() {
 	}
 }
 
+// Reads the eight byte header of a png file
 fn read_header(mut file: &File) {
 	let mut buf = [0u8; 8];
 	file.read(&mut buf).unwrap();
@@ -47,9 +48,15 @@ fn read_header(mut file: &File) {
 	print!("\n\n");
 }
 
+// Reads all the different chunks of the png, outputing
+// chunk size, type, and the checksum. If read_all is true
+// funciton works recursively, reading chunks until the last.
 fn read_chunk(mut file: &File, read_all: bool) {
+	// Gets size of chunk
 	let size = file.read_u32::<BigEndian>().unwrap();
 	println!("Chunk size: {}", size);
+	
+	// Gets type of chunk
 	let mut buf = [0u8; 4];
 	file.read(&mut buf).unwrap();
 	print!("Chunk type: ");
@@ -57,6 +64,8 @@ fn read_chunk(mut file: &File, read_all: bool) {
 		print!("{}", buf[i] as char);
 	}
 	print!("\n");
+	
+	// Check to see if this is end chunk
 	let end = [73, 69, 78, 68];
 	let mut is_end = true;
 	for i in 0..4 {
@@ -65,6 +74,8 @@ fn read_chunk(mut file: &File, read_all: bool) {
 			break;
 		}
 	}
+	
+	// Get the checksum
 	file.seek(SeekFrom::Current(size as i64)).unwrap();
 	file.read(&mut buf).unwrap();
 	print!("Checksum: ");
@@ -72,33 +83,50 @@ fn read_chunk(mut file: &File, read_all: bool) {
 		print!("{:02x}", buf[i]);
 	}
 	print!("\n\n");
+	
+	// Exit is end chunk seen
 	if is_end {
 		return;
 	}
+	
+	// Read next chunk if recursive
 	if read_all {
 		read_chunk(&file, read_all);
 	}
 }
 
+// Creates a new png that copies the file src, into the
+// file dest. Data encoded as a paLD chunk
 fn inject_payload(mut dest: &File, mut src: &File) {
+	// Ready the output file
 	let out = Path::new("out.png");
 	let mut out_file = File::create(&out).unwrap();
+	
+	// Create buffer to read in the dest file
 	let dest_size = dest.metadata().unwrap().len() as usize;
 	let mut dest_buf = vec![0u8; dest_size - 12];
-	let meta = src.metadata().unwrap();
-	let src_size = meta.len() as usize;
-	let mut payload = vec![];
-	let mut temp = vec![0u8; src_size];
 	dest.read(&mut dest_buf).unwrap();
-	src.read(&mut temp).unwrap();
-	payload.push(112);
-	payload.push(97);
-	payload.push(76);
-	payload.push(68);
-	for i in 0..temp.len() {
-		payload.push(temp[i]);
+	
+	// Create buffer to read in the src file to hide
+	let src_size = src.metadata().unwrap().len() as usize;
+	let mut src_buf = vec![0u8; src_size];
+	src.read(&mut src_buf).unwrap();
+	
+	// Ready the payload that will contain paLD chunk type
+	// and the src file data
+	let mut payload = vec![];
+	payload.push(112);  // p
+	payload.push(97);  // a
+	payload.push(76);  // L
+	payload.push(68);  //D
+	for i in 0..src_buf.len() {
+		payload.push(src_buf[i]);
 	}
+	
+	// Create a crc32 checksum over the payload data
 	let checksum = crc32::checksum_ieee(payload.as_slice());
+	
+	// Write all data to the new file, src is now hidden in dest
 	out_file.write_all(&mut dest_buf).unwrap();
 	out_file.write_u32::<BigEndian>(src_size as u32).unwrap();
 	out_file.write_all(&mut payload).unwrap();
@@ -106,6 +134,7 @@ fn inject_payload(mut dest: &File, mut src: &File) {
 	write_end(&out_file);
 }
 
+// Writes the ending chunk to the file
 fn write_end(mut file: &File) {
 	file.write_u32::<BigEndian>(0).unwrap();
 	file.write_all("IEND".as_bytes()).unwrap();
