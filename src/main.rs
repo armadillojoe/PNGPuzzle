@@ -10,6 +10,7 @@ use std::io::SeekFrom;
 use std::fs::File;
 use std::path::Path;
 use std::str;
+use std::string::String;
 use std::env;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use crc::crc32;
@@ -22,17 +23,20 @@ fn main() {
 	} else {
 		let path = Path::new(&args[2]);
 		let mut dest_file = File::open(&path).unwrap();
-		if args[1] == "encode" {
+		if args[1] == "inject" {
 			if args.len() < 4 {
 				println!("Usage {} encode <src> <dest>", args[0]);
 			} else {
 				let src_path = Path::new(&args[3]);
 				let mut src_file = File::open(&src_path).unwrap();
-				inject_payload(&dest_file, &src_file);
+				inject_payload(&dest_file, &src_file, &args[3]);
 			}
 		} else if args[1] == "view" {
 			read_header(&dest_file);
 			read_chunk(&dest_file, true);
+		} else if args[1] == "extract" {
+			read_header(&dest_file);
+			extract_payload(&dest_file);
 		}
 	}
 }
@@ -41,11 +45,6 @@ fn main() {
 fn read_header(mut file: &File) {
 	let mut buf = [0u8; 8];
 	file.read(&mut buf).unwrap();
-	println!("Reading header...");
-	for i in 0..8 {
-		print!("{:02x} ", buf[i]);
-	}
-	print!("\n\n");
 }
 
 // Reads all the different chunks of the png, outputing
@@ -66,15 +65,10 @@ fn read_chunk(mut file: &File, read_all: bool) {
 	print!("\n");
 	
 	// Check to see if this is end chunk
-	let end = [73, 69, 78, 68];
-	let mut is_end = true;
-	for i in 0..4 {
-		if buf[i] != end[i] {
-			is_end = false;
-			break;
-		}
-	}
-	
+	let chunk_buf = buf.clone();
+	let chunk_name = str::from_utf8(&chunk_buf).unwrap();
+	let is_end = chunk_name == "IEND";
+
 	// Get the checksum
 	file.seek(SeekFrom::Current(size as i64)).unwrap();
 	file.read(&mut buf).unwrap();
@@ -95,9 +89,44 @@ fn read_chunk(mut file: &File, read_all: bool) {
 	}
 }
 
+// Extracts the data hidden in a paLD chunk and writes it
+// to a new file
+fn extract_payload(mut file: &File) {
+	// Gets size of chunk
+	let size = file.read_u32::<BigEndian>().unwrap();
+	
+	// Check to see if this is the paLD chunk
+	let mut buf = [0u8; 4];
+	file.read(&mut buf).unwrap();
+	let chunk_buf = buf.clone();
+	let chunk_name = str::from_utf8(&chunk_buf).unwrap();
+	
+	// If not the paLD chunk, move to next chunk and check,
+	// or else extract the payload
+	if chunk_name != "paLD" {
+		file.seek(SeekFrom::Current((size + 4) as i64)).unwrap();
+		extract_payload(&file);
+	} else {
+		// Set up payload file
+		let name_length = file.read_u16::<BigEndian>().unwrap();
+		let mut filename_vec = vec![0u8; name_length as usize];
+		file.read(&mut filename_vec).unwrap();
+		let filename = String::from_utf8(filename_vec).unwrap();
+		let payload = Path::new(&filename);
+		let mut payload_file = File::create(&payload).unwrap();
+		
+		// Read the payload from the original file
+		let mut buf = vec![0u8; size as usize];
+		file.read(&mut buf).unwrap();
+		
+		// Write to payload file
+		payload_file.write_all(&mut buf).unwrap();
+	}
+}
+
 // Creates a new png that copies the file src, into the
 // file dest. Data encoded as a paLD chunk
-fn inject_payload(mut dest: &File, mut src: &File) {
+fn inject_payload(mut dest: &File, mut src: &File, filename: &String) {
 	// Ready the output file
 	let out = Path::new("out.png");
 	let mut out_file = File::create(&out).unwrap();
@@ -119,16 +148,23 @@ fn inject_payload(mut dest: &File, mut src: &File) {
 	payload.push(97);  // a
 	payload.push(76);  // L
 	payload.push(68);  //D
-	for i in 0..src_buf.len() {
-		payload.push(src_buf[i]);
-	}
+	
+	// Write the length of the hidden files name as a u16 
+	// and the name itsself to the payload
+	let filename_bytes = filename.as_bytes();
+	let length = filename_bytes.len() as u16;
+	payload.write_u16::<BigEndian>(length).unwrap();
+	payload.write_all(&filename_bytes).unwrap();
+	
+	// Write the hidden file to the payload buffer
+	payload.write_all(&mut src_buf).unwrap();
 	
 	// Create a crc32 checksum over the payload data
 	let checksum = crc32::checksum_ieee(payload.as_slice());
 	
 	// Write all data to the new file, src is now hidden in dest
 	out_file.write_all(&mut dest_buf).unwrap();
-	out_file.write_u32::<BigEndian>(src_size as u32).unwrap();
+	out_file.write_u32::<BigEndian>((src_size + (length as usize) + 2) as u32).unwrap();
 	out_file.write_all(&mut payload).unwrap();
 	out_file.write_u32::<BigEndian>(checksum).unwrap();
 	write_end(&out_file);
